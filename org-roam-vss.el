@@ -1,9 +1,9 @@
-;;; org-roam-embeddings.el --- Vector similarity search for Org Roam -*- lexical-binding: t -*-
+;;; org-roam-vss.el --- Vector similarity search for Org Roam -*- lexical-binding: t -*-
 
 ;; Author: skissue
 ;; Version: 0.1.0
 ;; Package-Requires: ()
-;; Homepage: https://github.com/skissue/org-roam-embeddings
+;; Homepage: https://github.com/skissue/org-roam-vss
 
 
 ;; This file is not part of GNU Emacs
@@ -28,6 +28,6 @@
 
 ;;; Code:
 
-(provide 'org-roam-embeddings)
+(provide 'org-roam-vss)
 
-;;; org-roam-embeddings.el ends here
+;;; org-roam-vss.el ends here
