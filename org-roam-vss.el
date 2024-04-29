@@ -126,6 +126,7 @@ First, check if an embedding was previously saved for the node
        rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
+;;;###autoload
 (defun org-roam-vss-update-embeddings (id)
   "Update or create the embeddings for the Org Roam node with ID.
  When called interactively, uses the node at point's ID.
@@ -145,6 +146,7 @@ First, check if an embedding was previously saved for the node
          (lambda (sig err)
            (signal sig (list err))))))))
 
+;;;###autoload
 (defun org-roam-vss-search (query)
   "Search for all embeddings that are similar to QUERY."
   (interactive "sQuery: ")
