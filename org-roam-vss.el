@@ -89,17 +89,27 @@ SELECT is non-nil."
    (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
            org-roam-vss-dimensions)) 
   (org-roam-vss--query nil
-   "CREATE TABLE IF NOT EXISTS roam_nodes
+                       "CREATE TABLE IF NOT EXISTS roam_nodes
       (id INTEGER PRIMARY KEY AUTOINCREMENT,
        node_id TEXT UNIQUE)")
   (org-roam-vss--query nil
-   "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
+                       "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
 
 (defun org-roam-vss--db-disconnect ()
   "Disconnect from SQLite database."
   (when org-roam-vss--db-connection
     (sqlite-close org-roam-vss--db-connection)
     (setq org-roam-vss--db-connection nil)))
+
+(defmacro org-roam-vss--with-embedding (text &rest body)
+  "Wrapper around `llm-embedding-async' that executes BODY with the
+embedding of TEXT bound to 'embedding'."
+  `(llm-embedding-async
+    org-roam-vss-llm ,text
+    (lambda (embedding) ,@body)
+    (lambda (sig err)
+      (signal sig (list err)))))
+(put 'org-roam-vss--with-embedding 'lisp-indent-function 'defun)
 
 (defun org-roam-vss--handle-returned-embedding (id embedding)
   "Handle a returned embedding, ready to be inserted into the SQLite database.
@@ -110,20 +120,20 @@ First, check if an embedding was previously saved for the node
   (with-sqlite-transaction org-roam-vss--db-connection
     (let ((rowid (caar
                   (org-roam-vss--query :select
-                   "SELECT id FROM roam_nodes WHERE node_id = ?"
-                   id))))
+                                       "SELECT id FROM roam_nodes WHERE node_id = ?"
+                                       id))))
       (unless rowid
         (setq rowid (caar
                      (org-roam-vss--query nil
-                      "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
-                      id))))
+                                          "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
+                                          id))))
       ;; sqlite-vss doesn't support UPDATE operations (yet)
       (org-roam-vss--query nil
-       "DELETE FROM vss_roam WHERE rowid = ?"
-       rowid)
+                           "DELETE FROM vss_roam WHERE rowid = ?"
+                           rowid)
       (org-roam-vss--query nil
-       "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
-       rowid (json-encode embedding))))
+                           "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
+                           rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
 ;;;###autoload
@@ -140,27 +150,21 @@ First, check if an embedding was previously saved for the node
     (org-roam-with-file (org-roam-node-file node) :kill
       ;; TODO Is exporting as text the best way to do this? For now, just a quick and easy solution.
       (let ((text (org-export-as 'ascii nil nil :body-only)))
-        (llm-embedding-async
-         org-roam-vss-llm text
-         (lambda (embedding) (org-roam-vss--handle-returned-embedding id embedding))
-         (lambda (sig err)
-           (signal sig (list err))))))))
+        (org-roam-vss--with-embedding text
+          (org-roam-vss--handle-returned-embedding id embedding))))))
 
 ;;;###autoload
 (defun org-roam-vss-search (query)
   "Search for all embeddings that are similar to QUERY."
   (interactive "sQuery: ")
-  (llm-embedding-async
-   org-roam-vss-llm query
-   (lambda (embedding)
-     (let* ((rows (org-roam-vss--query :select
-                   "SELECT rowid, distance FROM vss_roam
-                    WHERE vss_search(embedding, json(?))
-                    LIMIT 20"
-                   (json-encode embedding))))
-       (message "%S" rows)))
-   (lambda (sig err)
-     (signal sig (list err)))))
+  (org-roam-vss--with-embedding query
+    (let* ((rows (org-roam-vss--query
+                  :select
+                  "SELECT rowid, distance FROM vss_roam
+                   WHERE vss_search(embedding, json(?))
+                   LIMIT 20"
+                  (json-encode embedding))))
+      (message "%S" rows))))
 
 (provide 'org-roam-vss)
 
