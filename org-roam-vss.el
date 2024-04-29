@@ -163,9 +163,12 @@ First, check if an embedding was previously saved for the node
   (interactive "sQuery: ")
   (org-roam-vss--with-embedding query
     (let* ((rows (org-roam-vss--query
-                  :select "SELECT rowid, distance FROM vss_roam
-                           WHERE vss_search(embedding, json(?))
-                           LIMIT 20"
+                  ;; HACK When doing a JOIN, sqlite-vss complains about the lack
+                  ;; of a LIMIT clause even when it is present, so use the old
+                  ;; way of doing it instead.
+                  :select "SELECT roam_nodes.node_id, distance FROM vss_roam
+                           JOIN roam_nodes ON vss_roam.rowid = roam_nodes.id
+                           WHERE vss_search(embedding, vss_search_params(json(?), 20))"
                   (json-encode embedding))))
       (message "%S" rows))))
 
