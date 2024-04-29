@@ -88,12 +88,12 @@ SELECT is non-nil."
    ;; HACK For some reason, interpolating the dimensions doesn't work
    (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
            org-roam-vss-dimensions)) 
-  (org-roam-vss--query nil
-                       "CREATE TABLE IF NOT EXISTS roam_nodes
-      (id INTEGER PRIMARY KEY AUTOINCREMENT,
-       node_id TEXT UNIQUE)")
-  (org-roam-vss--query nil
-                       "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
+  (org-roam-vss--query
+   nil "CREATE TABLE IF NOT EXISTS roam_nodes
+        (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        node_id TEXT UNIQUE)")
+  (org-roam-vss--query
+   nil "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
 
 (defun org-roam-vss--db-disconnect ()
   "Disconnect from SQLite database."
@@ -126,21 +126,21 @@ First, check if an embedding was previously saved for the node
  update/insert the embedding into the embeddings table."
   (with-sqlite-transaction org-roam-vss--db-connection
     (let ((rowid (caar
-                  (org-roam-vss--query :select
-                                       "SELECT id FROM roam_nodes WHERE node_id = ?"
-                                       id))))
+                  (org-roam-vss--query
+                   :select "SELECT id FROM roam_nodes WHERE node_id = ?"
+                   id))))
       (unless rowid
         (setq rowid (caar
-                     (org-roam-vss--query nil
-                                          "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
-                                          id))))
+                     (org-roam-vss--query
+                      nil "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
+                      id))))
       ;; sqlite-vss doesn't support UPDATE operations (yet)
-      (org-roam-vss--query nil
-                           "DELETE FROM vss_roam WHERE rowid = ?"
-                           rowid)
-      (org-roam-vss--query nil
-                           "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
-                           rowid (json-encode embedding))))
+      (org-roam-vss--query
+       nil "DELETE FROM vss_roam WHERE rowid = ?"
+       rowid)
+      (org-roam-vss--query
+       nil "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
+       rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
 ;;;###autoload
@@ -163,10 +163,9 @@ First, check if an embedding was previously saved for the node
   (interactive "sQuery: ")
   (org-roam-vss--with-embedding query
     (let* ((rows (org-roam-vss--query
-                  :select
-                  "SELECT rowid, distance FROM vss_roam
-                   WHERE vss_search(embedding, json(?))
-                   LIMIT 20"
+                  :select "SELECT rowid, distance FROM vss_roam
+                           WHERE vss_search(embedding, json(?))
+                           LIMIT 20"
                   (json-encode embedding))))
       (message "%S" rows))))
 
