@@ -169,8 +169,21 @@ First, check if an embedding was previously saved for the node
                   :select "SELECT roam_nodes.node_id, distance FROM vss_roam
                            JOIN roam_nodes ON vss_roam.rowid = roam_nodes.id
                            WHERE vss_search(embedding, vss_search_params(json(?), 20))"
-                  (json-encode embedding))))
-      (message "%S" rows))))
+                  (json-encode embedding)))
+           (buffer (get-buffer-create "*VSS Search Results*"))
+           (inhibit-read-only t))
+      ;; Taken from `org-roam-buffer-render-contents'.
+      (switch-to-buffer buffer)
+      (erase-buffer)
+      (org-roam-mode)
+      (org-roam-buffer-set-header-line-format query)
+      (dolist (row rows)
+        (cl-destructuring-bind (id distance) row
+          (let ((node (org-roam-node-from-id id)))
+            (magit-insert-section (org-roam-backlinks)
+              (magit-insert-heading (format "%s (%d)"
+                                            (org-roam-node-title node)
+                                            (round distance))))))))))
 
 (provide 'org-roam-vss)
 
