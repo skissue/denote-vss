@@ -145,7 +145,7 @@ First, check if an embedding was previously saved for the node
          (lambda (sig err)
            (signal sig (list err))))))))
 
-(defun org-roam-vss-query (query)
+(defun org-roam-vss-search (query)
   "Search for all embeddings that are similar to QUERY."
   (interactive "sQuery: ")
   (llm-embedding-async
