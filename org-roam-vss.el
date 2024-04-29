@@ -84,7 +84,7 @@ SELECT is non-nil."
 
 (defun org-roam-vss--create-table ()
   "Create 'roam_nodes' and 'vss_roam' tables if needed."
-  (org-roam-vss--query
+  (org-roam-vss--query nil
    ;; HACK For some reason, interpolating the dimensions doesn't work
    (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
            org-roam-vss-dimensions)) 
@@ -110,6 +110,13 @@ embedding of TEXT bound to 'embedding'."
     (lambda (sig err)
       (signal sig (list err)))))
 (put 'org-roam-vss--with-embedding 'lisp-indent-function 'defun)
+
+(defun org-roam-vss--node-content (node)
+  "Return text content for node NODE."
+  (org-roam-with-file (org-roam-node-file node) :kill
+    (goto-char (org-roam-node-point node))
+    (org-roam-end-of-meta-data)
+    (buffer-substring-no-properties (point) (point-max))))
 
 (defun org-roam-vss--handle-returned-embedding (id embedding)
   "Handle a returned embedding, ready to be inserted into the SQLite database.
@@ -147,11 +154,8 @@ First, check if an embedding was previously saved for the node
   (let ((node (org-roam-node-from-id id)))
     (unless node
       (user-error "No valid node found for given ID."))
-    (org-roam-with-file (org-roam-node-file node) :kill
-      ;; TODO Is exporting as text the best way to do this? For now, just a quick and easy solution.
-      (let ((text (org-export-as 'ascii nil nil :body-only)))
-        (org-roam-vss--with-embedding text
-          (org-roam-vss--handle-returned-embedding id embedding))))))
+    (org-roam-vss--with-embedding (org-roam-vss--node-content node)
+      (org-roam-vss--handle-returned-embedding id embedding))))
 
 ;;;###autoload
 (defun org-roam-vss-search (query)
