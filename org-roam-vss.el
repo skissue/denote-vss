@@ -54,29 +54,46 @@
 regenerated."
   :type 'number)
 
+(defun org-roam-vss--query (select query &rest values)
+  "Simple wrapper around `sqlite-execute' that uses
+`org-roam-vss--db-connection' for the connection and ensures that
+the connection has been initialized.
+
+Executes QUERY with VALUES interpolated. Uses `sqlite-select' if
+SELECT is non-nil."
+  (org-roam-vss--maybe-connect)
+  (if select
+      (sqlite-select org-roam-vss--db-connection query values)
+    (sqlite-execute org-roam-vss--db-connection query values)))
+
+(defun org-roam-vss--maybe-connect ()
+  "Call `org-roam-vss--db-connect' if
+ `org-roam-vss--db-connection' hasn't been initialized yet."
+  (unless org-roam-vss--db-connection
+    (org-roam-vss--db-connect)))
+
 (defun org-roam-vss--db-connect ()
   "Connect to SQLite database, set up 'sqlite-vss', and save connection in
 `org-roam-vss--db-connection'."
-  (unless org-roam-vss--db-connection
-    (setq org-roam-vss--db-connection (sqlite-open org-roam-vss-db-location))
-    (sqlite-load-extension org-roam-vss--db-connection
-                           (expand-file-name "vector0.so" org-roam-vss-sqlite-vss-dir))
-    (sqlite-load-extension org-roam-vss--db-connection
-                           (expand-file-name "vss0.so" org-roam-vss-sqlite-vss-dir))
-    (org-roam-vss--create-table)))
+  (setq org-roam-vss--db-connection (sqlite-open org-roam-vss-db-location))
+  (sqlite-load-extension org-roam-vss--db-connection
+                         (expand-file-name "vector0.so" org-roam-vss-sqlite-vss-dir))
+  (sqlite-load-extension org-roam-vss--db-connection
+                         (expand-file-name "vss0.so" org-roam-vss-sqlite-vss-dir))
+  (org-roam-vss--create-table))
 
 (defun org-roam-vss--create-table ()
   "Create 'roam_nodes' and 'vss_roam' tables if needed."
-  (sqlite-execute org-roam-vss--db-connection
-                  ;; HACK For some reason, interpolating the dimensions doesn't work
-                  (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
-                          org-roam-vss-dimensions)) 
-  (sqlite-execute org-roam-vss--db-connection
-                  "CREATE TABLE IF NOT EXISTS roam_nodes
-                       (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        node_id TEXT UNIQUE)")
-  (sqlite-execute org-roam-vss--db-connection
-                  "CREATE INDEX node_id_index ON roam_nodes(node_id)"))
+  (org-roam-vss--query
+   ;; HACK For some reason, interpolating the dimensions doesn't work
+   (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
+           org-roam-vss-dimensions)) 
+  (org-roam-vss--query nil
+   "CREATE TABLE IF NOT EXISTS roam_nodes
+      (id INTEGER PRIMARY KEY AUTOINCREMENT,
+       node_id TEXT UNIQUE)")
+  (org-roam-vss--query nil
+   "CREATE INDEX node_id_index ON roam_nodes(node_id)"))
 
 (defun org-roam-vss--db-disconnect ()
   "Disconnect from SQLite database."
@@ -92,21 +109,22 @@ First, check if an embedding was previously saved for the node
  update/insert the embedding into the embeddings table."
   (with-sqlite-transaction org-roam-vss--db-connection
     (let ((rowid (caar
-                  (sqlite-select org-roam-vss--db-connection
-                                 "SELECT id FROM roam_nodes WHERE node_id = ?"
-                                 (list id)))))
+                  (org-roam-vss--query :select
+                   "SELECT id FROM roam_nodes WHERE node_id = ?"
+                   id))))
       (unless rowid
         (setq rowid (caar
-                     (sqlite-execute org-roam-vss--db-connection
-                                     "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
-                                     (list id)))))
+                     (org-roam-vss--query nil
+                      "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
+                      id))))
       ;; sqlite-vss doesn't support UPDATE operations (yet)
-      (sqlite-execute org-roam-vss--db-connection
-                      "DELETE FROM vss_roam WHERE rowid = ?"
-                      (list rowid))
-      (sqlite-execute org-roam-vss--db-connection
-                      "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
-                      (list rowid (json-encode embedding))))))
+      (org-roam-vss--query nil
+       "DELETE FROM vss_roam WHERE rowid = ?"
+       rowid)
+      (org-roam-vss--query nil
+       "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
+       rowid (json-encode embedding))))
+  (message "Embeddings updated!"))
 
 (defun org-roam-vss-update-embeddings (id)
   "Update or create the embeddings for the Org Roam node with ID.
@@ -114,6 +132,7 @@ First, check if an embedding was previously saved for the node
  Processes embedding using
  `org-roam-vss--handle-returned-embedding'."
   (interactive (list (org-roam-node-id (org-roam-node-at-point))))
+  (org-roam-vss--maybe-connect)
   (let ((node (org-roam-node-from-id id)))
     (unless node
       (user-error "No valid node found for given ID."))
@@ -132,11 +151,11 @@ First, check if an embedding was previously saved for the node
   (llm-embedding-async
    org-roam-vss-llm query
    (lambda (embedding)
-     (let* ((rows (sqlite-select org-roam-vss--db-connection
-                                 "SELECT rowid, distance FROM vss_roam
-                                  WHERE vss_search(embedding, json(?))
-                                  LIMIT 20"
-                                 (list (json-encode embedding)))))
+     (let* ((rows (org-roam-vss--query :select
+                   "SELECT rowid, distance FROM vss_roam
+                    WHERE vss_search(embedding, json(?))
+                    LIMIT 20"
+                   (json-encode embedding))))
        (message "%S" rows)))
    (lambda (sig err)
      (signal sig (list err)))))
