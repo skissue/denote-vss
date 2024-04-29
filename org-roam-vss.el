@@ -144,18 +144,18 @@ First, check if an embedding was previously saved for the node
   (message "Embeddings updated!"))
 
 ;;;###autoload
-(defun org-roam-vss-update-embeddings (id)
-  "Update or create the embeddings for the Org Roam node with ID.
- When called interactively, uses the node at point's ID.
+(defun org-roam-vss-update-embeddings (node)
+  "Update or create the embeddings for the Org Roam node NODE.
+ When called interactively, uses the node at point.
  Processes embedding using
  `org-roam-vss--handle-returned-embedding'."
-  (interactive (list (org-roam-node-id (org-roam-node-at-point))))
+  (interactive (list (org-roam-node-at-point)))
   (org-roam-vss--maybe-connect)
-  (let ((node (org-roam-node-from-id id)))
-    (unless node
-      (user-error "No valid node found for given ID."))
-    (org-roam-vss--with-embedding (org-roam-vss--node-content node)
-      (org-roam-vss--handle-returned-embedding id embedding))))
+  (unless node
+    (user-error "No valid node found."))
+  (org-roam-vss--with-embedding (org-roam-vss--node-content node)
+    (org-roam-vss--handle-returned-embedding
+     (org-roam-node-id node) embedding)))
 
 ;;;###autoload
 (defun org-roam-vss-search (query)
