@@ -158,6 +158,13 @@ First, check if an embedding was previously saved for the node
      (org-roam-node-id node) embedding)))
 
 ;;;###autoload
+(defun org-roam-vss-update-all ()
+  "Update embeddings for all nodes."
+  (interactive)
+  (dolist (node (org-roam-node-list))
+    (org-roam-vss-update-embeddings node)))
+
+;;;###autoload
 (defun org-roam-vss-search (query)
   "Search for all embeddings that are similar to QUERY."
   (interactive "sQuery: ")
