@@ -93,7 +93,7 @@ SELECT is non-nil."
       (id INTEGER PRIMARY KEY AUTOINCREMENT,
        node_id TEXT UNIQUE)")
   (org-roam-vss--query nil
-   "CREATE INDEX node_id_index ON roam_nodes(node_id)"))
+   "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
 
 (defun org-roam-vss--db-disconnect ()
   "Disconnect from SQLite database."
