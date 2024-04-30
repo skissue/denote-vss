@@ -54,6 +54,17 @@
 regenerated."
   :type 'number)
 
+(defcustom org-roam-vss-node-content-function #'org-roam-vss-node-whole-document
+  "Function to extract documents from a node. Should take a single
+argument NODE, and return a list of cons cells where the car is
+the point where the document should start and the cdr is where
+the document should end. Will be called with NODE's file as the
+active buffer.
+
+Defaults to `org-roam-vss-node-whole-document', which returns the
+entire node's content as one document."
+  :type 'function)
+
 (defun org-roam-vss--query (select query &rest values)
   "Simple wrapper around `sqlite-execute' that uses
 `org-roam-vss--db-connection' for the connection and ensures that
@@ -84,14 +95,16 @@ SELECT is non-nil."
 
 (defun org-roam-vss--create-table ()
   "Create 'roam_nodes' and 'vss_roam' tables if needed."
-  (org-roam-vss--query nil
+  (org-roam-vss--query
    ;; HACK For some reason, interpolating the dimensions doesn't work
-   (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
-           org-roam-vss-dimensions)) 
+   nil (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
+               org-roam-vss-dimensions)) 
   (org-roam-vss--query
    nil "CREATE TABLE IF NOT EXISTS roam_nodes
         (id INTEGER PRIMARY KEY AUTOINCREMENT,
-        node_id TEXT UNIQUE)")
+         node_id TEXT UNIQUE,
+         start INT,
+         end INT)")
   (org-roam-vss--query
    nil "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
 
@@ -111,33 +124,40 @@ embedding of TEXT bound to 'embedding'."
       (signal sig (list err)))))
 (put 'org-roam-vss--with-embedding 'lisp-indent-function 'defun)
 
-(defun org-roam-vss--node-content (node)
-  "Return text content for node NODE."
-  (org-roam-with-file (org-roam-node-file node) :kill
-    (goto-char (org-roam-node-point node))
-    (org-roam-end-of-meta-data)
-    (buffer-substring-no-properties (point) (point-max))))
+(defun org-roam-vss-node-whole-document (node)
+  "Return the entire body of NODE as a single document. Simple, but
+may not work well if you have nodes with large amounts of
+content."
+  (goto-char (org-roam-node-point node))
+  (org-roam-end-of-meta-data)
+  (list (cons (point) (point-max))))
 
-(defun org-roam-vss--handle-returned-embedding (id embedding)
+(defun org-roam-vss--clear-embeddings (id)
+  "Clear all embeddings for the node with ID from the database."
+  (with-sqlite-transaction org-roam-vss--db-connection
+    (let ((rows (org-roam-vss--query
+                 :select "SELECT id FROM roam_nodes WHERE node_id = ?"
+                 id)))
+      (dolist (row rows)
+        (org-roam-vss--query
+         nil "DELETE FROM vss_roam WHERE rowid = ?"
+         (car row)))
+      (org-roam-vss--query
+       nil "DELETE FROM roam_nodes WHERE node_id = ?"
+       id))))
+
+(defun org-roam-vss--handle-returned-embedding (id document embedding)
   "Handle a returned embedding, ready to be inserted into the SQLite database.
 
-First, check if an embedding was previously saved for the node
- with ID; if not, insert a record to keep track of it. Then,
- update/insert the embedding into the embeddings table."
+First, clear all previous embeddings for node ID. Then,
+update/insert the embedding into the embeddings table."
+  (org-roam-vss--clear-embeddings id)
   (with-sqlite-transaction org-roam-vss--db-connection
     (let ((rowid (caar
                   (org-roam-vss--query
-                   :select "SELECT id FROM roam_nodes WHERE node_id = ?"
-                   id))))
-      (unless rowid
-        (setq rowid (caar
-                     (org-roam-vss--query
-                      nil "INSERT INTO roam_nodes(node_id) VALUES (?) RETURNING id"
-                      id))))
-      ;; sqlite-vss doesn't support UPDATE operations (yet)
-      (org-roam-vss--query
-       nil "DELETE FROM vss_roam WHERE rowid = ?"
-       rowid)
+                   nil "INSERT INTO roam_nodes(node_id, start, end)
+                        VALUES (?, ?, ?) RETURNING id"
+                   id (car document) (cdr document)))))
       (org-roam-vss--query
        nil "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
        rowid (json-encode embedding))))
@@ -153,9 +173,13 @@ First, check if an embedding was previously saved for the node
   (org-roam-vss--maybe-connect)
   (unless node
     (user-error "No valid node found."))
-  (org-roam-vss--with-embedding (org-roam-vss--node-content node)
-    (org-roam-vss--handle-returned-embedding
-     (org-roam-node-id node) embedding)))
+  (org-roam-with-file (org-roam-node-file node) :kill
+      (dolist (document (funcall org-roam-vss-node-content-function node))
+        (org-roam-vss--with-embedding (buffer-substring-no-properties
+                                       (car document)
+                                       (cdr document))
+          (org-roam-vss--handle-returned-embedding
+           (org-roam-node-id node) document embedding)))))
 
 ;;;###autoload
 (defun org-roam-vss-update-all ()
