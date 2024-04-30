@@ -165,6 +165,19 @@ First, check if an embedding was previously saved for the node
     (org-roam-vss-update-embeddings node)))
 
 ;;;###autoload
+(defun org-roam-vss-clear-db (arg)
+  "Clear all entries from embedding database. With prefix
+ argument ARG, don't request user confirmation."
+  (interactive "P")
+  (when (or arg
+            (yes-or-no-p "Really clear database?"))
+    (org-roam-vss--query
+     nil "DROP TABLE roam_nodes")
+    (org-roam-vss--query
+     nil "DROP TABLE vss_roam")
+    (org-roam-vss--create-table)))
+
+;;;###autoload
 (defun org-roam-vss-search (query)
   "Search for all embeddings that are similar to QUERY."
   (interactive "sQuery: ")
