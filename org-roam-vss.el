@@ -102,7 +102,7 @@ SELECT is non-nil."
   (org-roam-vss--query
    nil "CREATE TABLE IF NOT EXISTS roam_nodes
         (id INTEGER PRIMARY KEY AUTOINCREMENT,
-         node_id TEXT UNIQUE,
+         node_id TEXT,
          start INT,
          end INT)")
   (org-roam-vss--query
@@ -132,6 +132,19 @@ content."
   (org-roam-end-of-meta-data)
   (list (cons (point) (point-max))))
 
+(defun org-roam-vss-node-paragraph-documents (node)
+  "Return every paragraph from the body of NODE as an individual
+document. Paragraphs are determined by two consecutive newlines."
+  (save-excursion
+    (goto-char (org-roam-node-point node))
+    (org-roam-end-of-meta-data)
+    (cl-loop while (< (point) (point-max))
+             for start = (point)
+             and end = (progn
+                         (re-search-forward "\n\n" nil :to-end)
+                         (point))
+             collect (cons start end))))
+
 (defun org-roam-vss--clear-embeddings (id)
   "Clear all embeddings for the node with ID from the database."
   (with-sqlite-transaction org-roam-vss--db-connection
@@ -147,11 +160,8 @@ content."
        id))))
 
 (defun org-roam-vss--handle-returned-embedding (id document embedding)
-  "Handle a returned embedding, ready to be inserted into the SQLite database.
-
-First, clear all previous embeddings for node ID. Then,
-update/insert the embedding into the embeddings table."
-  (org-roam-vss--clear-embeddings id)
+  "Handle a returned embedding, ready to be inserted into the SQLite
+database."
   (with-sqlite-transaction org-roam-vss--db-connection
     (let ((rowid (caar
                   (org-roam-vss--query
@@ -173,6 +183,7 @@ update/insert the embedding into the embeddings table."
   (org-roam-vss--maybe-connect)
   (unless node
     (user-error "No valid node found."))
+  (org-roam-vss--clear-embeddings (org-roam-node-id node))
   (org-roam-with-file (org-roam-node-file node) :kill
       (dolist (document (funcall org-roam-vss-node-content-function node))
         (org-roam-vss--with-embedding (buffer-substring-no-properties
