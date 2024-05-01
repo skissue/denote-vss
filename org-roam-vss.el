@@ -221,7 +221,7 @@ database."
                   ;; HACK When doing a JOIN, sqlite-vss complains about the lack
                   ;; of a LIMIT clause even when it is present, so use the old
                   ;; way of doing it instead.
-                  :select "SELECT roam_nodes.node_id, distance FROM vss_roam
+                  :select "SELECT node_id, start, end, distance FROM vss_roam
                            JOIN roam_nodes ON vss_roam.rowid = roam_nodes.id
                            WHERE vss_search(embedding, vss_search_params(json(?), 20))"
                   (json-encode embedding)))
@@ -233,12 +233,16 @@ database."
       (org-roam-mode)
       (org-roam-buffer-set-header-line-format query)
       (dolist (row rows)
-        (cl-destructuring-bind (id distance) row
+        (cl-destructuring-bind (id start end dist) row
           (let ((node (org-roam-node-from-id id)))
             (magit-insert-section (org-roam-backlinks)
               (magit-insert-heading (format "%s (%d)"
                                             (org-roam-node-title node)
-                                            (round distance))))))))))
+                                            (round dist)))
+              (insert
+               (org-roam-fontify-like-in-org-mode
+                (org-roam-with-file (org-roam-node-file node) :kill
+                  (buffer-substring-no-properties start end)))))))))))
 
 (provide 'org-roam-vss)
 
