@@ -24,13 +24,13 @@
 
 ;;; Commentary:
 
-;; (WIP) Vector similarity search for Org Roam based on an embeddings database.
+;; (WIP) Vector similarity search for Denote using sqlite-vss.
 
 ;;; Code:
 
 (require 'denote)
 (require 'llm)
-
+(require 'sqlite)
 
 (defcustom denote-vss-db-location (expand-file-name "denote-vss.db"
                                                     denote-directory)
@@ -51,7 +51,7 @@ Changing this requires regenerating the entire database!"
 If this changes, the entire database MUST be regenerated."
   :type 'number)
 
-(defcustom denote-vss-node-content-function #'denote-vss-node-whole-document
+(defcustom denote-vss-node-content-function #'denote-vss-extract-whole-document
   "Function to extract documents from a node.
 Should take a single argument NODE, and return a list of cons cells
 where the car is the point where the document should start and the cdr
@@ -78,45 +78,44 @@ Uses `sqlite-select' if SELECT is non-nil."
     (sqlite-execute denote-vss--db-connection query values)))
 
 (defun denote-vss--maybe-connect ()
-  "Call `denote-vss--db-connect' if
- `denote-vss--db-connection' hasn't been initialized yet."
+  "Initialize the database connection if needed.
+Calls `denote-vss--db-connect' if `denote-vss--db-connection' is nil."
   (unless denote-vss--db-connection
     (denote-vss--db-connect)))
 
 (defun denote-vss--db-connect ()
-  "Connect to SQLite database, set up 'sqlite-vss', and save connection in
-`denote-vss--db-connection'."
+  "Initialize SQLite database connection and setup.
+Connect to SQLite database, set up 'sqlite-vss', create tables if
+necessary, and save connection in `denote-vss--db-connection'."
   (setq denote-vss--db-connection (sqlite-open denote-vss-db-location))
-  (sqlite-load-extension denote-vss--db-connection
-                         (expand-file-name "vector0.so" denote-vss-sqlite-vss-dir))
-  (sqlite-load-extension denote-vss--db-connection
-                         (expand-file-name "vss0.so" denote-vss-sqlite-vss-dir))
+  (dolist (plugin '("vector0.so" "vss0.so"))
+    (sqlite-load-extension denote-vss--db-connection
+                           (expand-file-name plugin denote-vss-sqlite-vss-dir)))
   (denote-vss--create-table))
 
 (defun denote-vss--create-table ()
-  "Create 'roam_nodes' and 'vss_roam' tables if needed."
+  "Create `denote_documents' and `vss_denote' tables if needed."
   (denote-vss--query
    ;; HACK For some reason, interpolating the dimensions doesn't work
-   nil (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_roam USING vss0(embedding(%d))"
+   nil (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_denote USING vss0(embedding(%d))"
                denote-vss-dimensions)) 
   (denote-vss--query
-   nil "CREATE TABLE IF NOT EXISTS roam_nodes
+   nil "CREATE TABLE IF NOT EXISTS denote_documents
         (id INTEGER PRIMARY KEY AUTOINCREMENT,
-         node_id TEXT,
-         start INT,
-         end INT)")
+         denote_id TEXT,
+         content TEXT)")
   (denote-vss--query
-   nil "CREATE INDEX IF NOT EXISTS node_id_index ON roam_nodes(node_id)"))
+   nil "CREATE INDEX IF NOT EXISTS denote_id_index ON denote_documents(denote_id)"))
 
 (defun denote-vss--db-disconnect ()
-  "Disconnect from SQLite database."
+  "Close SQLite connection."
   (when denote-vss--db-connection
     (sqlite-close denote-vss--db-connection)
     (setq denote-vss--db-connection nil)))
 
 (defmacro denote-vss--with-embedding (text &rest body)
   "Wrapper around `llm-embedding-async' that executes BODY with the
-embedding of TEXT bound to 'embedding'."
+embedding of TEXT bound to `embedding'."
   `(llm-embedding-async
     denote-vss-llm ,text
     (lambda (embedding) ,@body)
@@ -124,20 +123,19 @@ embedding of TEXT bound to 'embedding'."
       (signal sig (list err)))))
 (put 'denote-vss--with-embedding 'lisp-indent-function 'defun)
 
-(defun denote-vss-node-whole-document (node)
-  "Return the entire body of NODE as a single document. Simple, but
-may not work well if you have nodes with large amounts of
+(defun denote-vss-extract-whole-document (file)
+  "Return the entire body of FILE as a single document.
+Simple, but may not work well if you have nodes with large amounts of
 content."
-  (goto-char (org-roam-node-point node))
-  (org-roam-end-of-meta-data)
-  (list (cons (point) (point-max))))
+  (list (with-temp-buffer
+          (insert-file-contents file)
+          (buffer-string))))
 
-(defun denote-vss-node-paragraph-documents (node)
-  "Return every paragraph from the body of NODE as an individual
-document. Paragraphs are determined by two consecutive newlines."
-  (save-excursion
-    (goto-char (org-roam-node-point node))
-    (org-roam-end-of-meta-data)
+(defun denote-vss-node-paragraph-documents (file)
+  "Return every paragraph from FILE as an individual document.
+Paragraphs are determined by two consecutive newlines."
+  (with-temp-buffer
+    (insert-file-contents file)
     (cl-loop while (< (point) (point-max))
              for start = (point)
              and end = (progn
@@ -146,70 +144,66 @@ document. Paragraphs are determined by two consecutive newlines."
              collect (cons start end))))
 
 (defun denote-vss--clear-embeddings (id)
-  "Clear all embeddings for the node with ID from the database."
+  "Clear all embeddings for the note with ID from the database."
   (with-sqlite-transaction denote-vss--db-connection
     (let ((rows (denote-vss--query
-                 :select "SELECT id FROM roam_nodes WHERE node_id = ?"
+                 :select "SELECT id FROM denote_documents WHERE denote_id = ?"
                  id)))
       (dolist (row rows)
         (denote-vss--query
-         nil "DELETE FROM vss_roam WHERE rowid = ?"
+         nil "DELETE FROM vss_denote WHERE rowid = ?"
          (car row)))
       (denote-vss--query
-       nil "DELETE FROM roam_nodes WHERE node_id = ?"
+       nil "DELETE FROM denote_documents WHERE denote_id = ?"
        id))))
 
-(defun denote-vss--handle-returned-embedding (id document embedding)
-  "Handle a returned embedding, ready to be inserted into the SQLite
-database."
+(defun denote-vss--handle-returned-embedding (id content embedding)
+  "Insert a returned EMBEDDING of CONTENT into the database with ID."
   (with-sqlite-transaction denote-vss--db-connection
     (let ((rowid (caar
                   (denote-vss--query
-                   nil "INSERT INTO roam_nodes(node_id, start, end)
-                        VALUES (?, ?, ?) RETURNING id"
-                   id (car document) (cdr document)))))
+                   nil "INSERT INTO denote_documents(denote_id, content)
+                        VALUES (?, ?) RETURNING id"
+                   id content))))
       (denote-vss--query
-       nil "INSERT INTO vss_roam(rowid, embedding) VALUES (?, ?)"
+       nil "INSERT INTO vss_denote(rowid, embedding) VALUES (?, ?)"
        rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
 ;;;###autoload
-(defun denote-vss-update-embeddings (node)
-  "Update or create the embeddings for the Org Roam node NODE.
- When called interactively, uses the node at point.
- Processes embedding using
- `denote-vss--handle-returned-embedding'."
-  (interactive (list (org-roam-node-at-point)))
+(defun denote-vss-update-embeddings (file)
+  "Update or create the embeddings for the Denote note FILE.
+When called interactively, uses the active buffer's file if it is a
+Denote note."
+  (interactive (list buffer-file-name))
+  (unless (and file (denote-file-is-note-p file))
+    (user-error "No valid note found!"))
   (denote-vss--maybe-connect)
-  (unless node
-    (user-error "No valid node found."))
-  (denote-vss--clear-embeddings (org-roam-node-id node))
-  (org-roam-with-file (org-roam-node-file node) :kill
-      (dolist (document (funcall denote-vss-node-content-function node))
-        (denote-vss--with-embedding (buffer-substring-no-properties
-                                     (car document)
-                                     (cdr document))
-          (denote-vss--handle-returned-embedding
-           (org-roam-node-id node) document embedding)))))
+  (let ((id (denote-retrieve-filename-identifier file)))
+    (denote-vss--clear-embeddings id)
+    (dolist (document (funcall denote-vss-node-content-function file))
+      (denote-vss--with-embedding document
+        (denote-vss--handle-returned-embedding
+         id document embedding)))))
 
 ;;;###autoload
 (defun denote-vss-update-all ()
   "Update embeddings for all nodes."
   (interactive)
-  (dolist (node (org-roam-node-list))
-    (denote-vss-update-embeddings node)))
+  (dolist (file (denote-directory-files))
+    (denote-vss-update-embeddings file)))
 
 ;;;###autoload
 (defun denote-vss-clear-db (arg)
-  "Clear all entries from embedding database. With prefix
- argument ARG, don't request user confirmation."
+  "Clear all entries from embeddings database.
+With prefix argument ARG, don't request user confirmation."
   (interactive "P")
   (when (or arg
             (yes-or-no-p "Really clear database?"))
     (denote-vss--query
-     nil "DROP TABLE roam_nodes")
+     nil "DROP TABLE denote_documents")
     (denote-vss--query
-     nil "DROP TABLE vss_roam")
+     nil "DROP TABLE vss_denote")
     (denote-vss--create-table)))
 
 ;;;###autoload
@@ -221,28 +215,17 @@ database."
                   ;; HACK When doing a JOIN, sqlite-vss complains about the lack
                   ;; of a LIMIT clause even when it is present, so use the old
                   ;; way of doing it instead.
-                  :select "SELECT node_id, start, end, distance FROM vss_roam
-                           JOIN roam_nodes ON vss_roam.rowid = roam_nodes.id
+                  :select "SELECT denote_id, content, distance FROM vss_denote
+                           JOIN denote_documents ON vss_denote.rowid = denote_documents.id
                            WHERE vss_search(embedding, vss_search_params(json(?), 20))"
                   (json-encode embedding)))
            (buffer (get-buffer-create "*VSS Search Results*"))
            (inhibit-read-only t))
-      ;; Taken from `org-roam-buffer-render-contents'.
       (switch-to-buffer buffer)
       (erase-buffer)
-      (org-roam-mode)
-      (org-roam-buffer-set-header-line-format query)
       (dolist (row rows)
-        (cl-destructuring-bind (id start end dist) row
-          (let ((node (org-roam-node-from-id id)))
-            (magit-insert-section (org-roam-backlinks)
-              (magit-insert-heading (format "%s (%d)"
-                                            (org-roam-node-title node)
-                                            (round dist)))
-              (insert
-               (org-roam-fontify-like-in-org-mode
-                (org-roam-with-file (org-roam-node-file node) :kill
-                  (buffer-substring-no-properties start end)))))))))))
+        (cl-destructuring-bind (id content dist) row
+          (insert (format "%s (%d)" content dist)))))))
 
 (provide 'denote-vss)
 
