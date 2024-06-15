@@ -62,6 +62,10 @@ Defaults to `denote-vss-node-whole-document', which returns the
 entire node's content as one document."
   :type 'function)
 
+(defcustom denote-vss-update-synchronously nil
+  "Whether to update embeddings with a synchronous call."
+  :type 'boolean)
+
 (defvar denote-vss--db-connection nil
   "`denote-vss' SQLite database connection.")
 
@@ -114,16 +118,6 @@ necessary, and save connection in `denote-vss--db-connection'."
     (sqlite-close denote-vss--db-connection)
     (setq denote-vss--db-connection nil)))
 
-(defmacro denote-vss--with-embedding (text &rest body)
-  "Wrapper around `llm-embedding-async' that executes BODY with the
-embedding of TEXT bound to `embedding'."
-  `(llm-embedding-async
-    denote-vss-llm ,text
-    (lambda (embedding) ,@body)
-    (lambda (sig err)
-      (signal sig (list err)))))
-(put 'denote-vss--with-embedding 'lisp-indent-function 'defun)
-
 (defun denote-vss-extract-whole-document (file)
   "Return the entire body of FILE as a single document.
 Simple, but may not work well if you have nodes with large amounts of
@@ -143,6 +137,25 @@ Paragraphs are determined by two consecutive newlines."
                          (re-search-forward "\n\n" nil :to-end)
                          (point))
              collect (cons start end))))
+
+(defun denote-vss--embedding-callback (text callback)
+  "Calculates embedding for TEXT and passes it to CALLBACK.
+Embedding is calculated synchronously if
+`denote-vss-update-synchronously' is non-nil, and asynchronously
+otherwise."
+  (if denote-vss-update-synchronously
+      (funcall callback (llm-embedding denote-vss-llm text))
+    (llm-embedding-async
+     denote-vss-llm text
+     callback (lambda (sig err)
+                (signal sig (list err))))))
+    
+(defmacro denote-vss--with-embedding (text &rest body)
+  "Execute BODY with the embedding for TEXT bound to `embedding'.
+Thin wrapper around `denote-vss--embedding-callback'."
+  `(denote-vss--embedding-callback
+    ,text (lambda (embedding) ,@body)))
+(put 'denote-vss--with-embedding 'lisp-indent-function 'defun)
 
 (defun denote-vss--clear-embeddings (id)
   "Clear all embeddings for the note with ID from the database."
@@ -204,8 +217,13 @@ Denote note."
 (defun denote-vss-update-all ()
   "Update embeddings for all nodes."
   (interactive)
-  (dolist (file (denote-directory-files))
-    (denote-vss-update-embeddings file)))
+  (let ((denote-vss-update-synchronously t))
+    (cl-loop for file in (denote-directory-files)
+             for i = 1 then (1+ i)
+             for length = (length (denote-directory-files))
+             do
+             (denote-vss-update-embeddings file)
+             (message "Updating embeddings (%d/%d)…" i length))))
 
 ;;;###autoload
 (defun denote-vss-clear-db (arg)
