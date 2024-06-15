@@ -171,6 +171,19 @@ Paragraphs are determined by two consecutive newlines."
        rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
+(defun denote-vss--get-xref-item (id point content)
+  "Return an `xref-match-item' for note with ID at POINT with CONTENT."
+  (let* ((file (denote-get-path-by-id id))
+         ;; It may seem wasteful to open a buffer for every searched file, but
+         ;; xref actually does this in the background with `xref-file-location'
+         ;; anyway; the reason we don't use it is because it wants a line and
+         ;; column number, but we're storing the point.
+         (buf (find-file-noselect file)))
+    (xref-make-match
+     content
+     (xref-make-buffer-location buf point)
+     (length content))))
+
 ;;;###autoload
 (defun denote-vss-update-embeddings (file)
   "Update or create the embeddings for the Denote note FILE.
@@ -219,14 +232,13 @@ With prefix argument ARG, don't request user confirmation."
                   :select "SELECT denote_id, content, point, distance FROM vss_denote
                            JOIN documents ON vss_denote.rowid = documents.id
                            WHERE vss_search(embedding, vss_search_params(json(?), 20))"
-                  (json-encode embedding)))
-           (buffer (get-buffer-create "*VSS Search Results*"))
-           (inhibit-read-only t))
-      (switch-to-buffer buffer)
-      (erase-buffer)
-      (dolist (row rows)
-        (cl-destructuring-bind (id content point dist) row
-          (insert (format "%s (%d)" content dist)))))))
+                  (json-encode embedding))))
+      (xref-show-xrefs
+       (mapcar (lambda (row)
+                 (cl-destructuring-bind (id content point dist) row
+                   (denote-vss--get-xref-item id point content)))
+               rows)
+       nil))))
 
 (provide 'denote-vss)
 
