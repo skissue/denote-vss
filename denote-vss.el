@@ -184,18 +184,32 @@ Thin wrapper around `denote-vss--embedding-callback'."
        rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
+(cl-defstruct (denote-vss--xref-file-point-location
+               (:constructor denote-vss--make-xref (file point)))
+  "A struct akin to `xref-file-location' but using point."
+  file point)
+
+(cl-defmethod xref-location-group ((l denote-vss--xref-file-point-location))
+  "Return file slot of L for grouping."
+  (denote-vss--xref-file-point-location-file l))
+
+(cl-defmethod xref-location-marker ((l denote-vss--xref-file-point-location))
+  "Return marker to the point slot of L."
+  (pcase-let (((cl-struct denote-vss--xref-file-point-location file point) l))
+    (with-current-buffer (find-file-noselect file)
+      (save-restriction
+        (widen)
+        (save-excursion
+          (goto-char point)
+          (point-marker))))))
+
 (defun denote-vss--get-xref-item (id point content dist)
-  "Return an `xref-match-item' for note with ID at POINT with CONTENT."
-  (let* ((file (denote-get-path-by-id id))
-         ;; It may seem wasteful to open a buffer for every searched file, but
-         ;; xref actually does this in the background with `xref-file-location'
-         ;; anyway; the reason we don't use it is because it wants a line and
-         ;; column number, but we're storing the point.
-         (buf (find-file-noselect file)))
-    (xref-make-match
+  "Return an `xref-item' for note with ID at POINT with CONTENT.
+Includes DIST at the top of the content."
+  (let* ((file (denote-get-path-by-id id)))
+    (xref-make
      (format "Distance: %d\n%s" (round dist) content)
-     (xref-make-buffer-location buf point)
-     (length content))))
+     (denote-vss--make-xref file point))))
 
 ;;;###autoload
 (defun denote-vss-update-embeddings (file)
