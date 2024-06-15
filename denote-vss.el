@@ -94,18 +94,19 @@ necessary, and save connection in `denote-vss--db-connection'."
   (denote-vss--create-table))
 
 (defun denote-vss--create-table ()
-  "Create `denote_documents' and `vss_denote' tables if needed."
+  "Create `documents' and `vss_denote' tables if needed."
   (denote-vss--query
    ;; HACK For some reason, interpolating the dimensions doesn't work
    nil (format "CREATE VIRTUAL TABLE IF NOT EXISTS vss_denote USING vss0(embedding(%d))"
                denote-vss-dimensions)) 
   (denote-vss--query
-   nil "CREATE TABLE IF NOT EXISTS denote_documents
+   nil "CREATE TABLE IF NOT EXISTS documents
         (id INTEGER PRIMARY KEY AUTOINCREMENT,
          denote_id TEXT,
-         content TEXT)")
+         content TEXT,
+         point INT)")
   (denote-vss--query
-   nil "CREATE INDEX IF NOT EXISTS denote_id_index ON denote_documents(denote_id)"))
+   nil "CREATE INDEX IF NOT EXISTS denote_id_index ON documents(denote_id)"))
 
 (defun denote-vss--db-disconnect ()
   "Close SQLite connection."
@@ -129,7 +130,7 @@ Simple, but may not work well if you have nodes with large amounts of
 content."
   (list (with-temp-buffer
           (insert-file-contents file)
-          (buffer-string))))
+          (cons (point-min) (buffer-string)))))
 
 (defun denote-vss-node-paragraph-documents (file)
   "Return every paragraph from FILE as an individual document.
@@ -147,24 +148,24 @@ Paragraphs are determined by two consecutive newlines."
   "Clear all embeddings for the note with ID from the database."
   (with-sqlite-transaction denote-vss--db-connection
     (let ((rows (denote-vss--query
-                 :select "SELECT id FROM denote_documents WHERE denote_id = ?"
+                 :select "SELECT id FROM documents WHERE denote_id = ?"
                  id)))
       (dolist (row rows)
         (denote-vss--query
          nil "DELETE FROM vss_denote WHERE rowid = ?"
          (car row)))
       (denote-vss--query
-       nil "DELETE FROM denote_documents WHERE denote_id = ?"
+       nil "DELETE FROM documents WHERE denote_id = ?"
        id))))
 
-(defun denote-vss--handle-returned-embedding (id content embedding)
-  "Insert a returned EMBEDDING of CONTENT into the database with ID."
+(defun denote-vss--handle-returned-embedding (id document embedding)
+  "Insert a returned EMBEDDING for DOCUMENT into the database with ID."
   (with-sqlite-transaction denote-vss--db-connection
     (let ((rowid (caar
                   (denote-vss--query
-                   nil "INSERT INTO denote_documents(denote_id, content)
-                        VALUES (?, ?) RETURNING id"
-                   id content))))
+                   nil "INSERT INTO documents(denote_id, point, content)
+                        VALUES (?, ?, ?) RETURNING id"
+                   id (car document) (cdr document)))))
       (denote-vss--query
        nil "INSERT INTO vss_denote(rowid, embedding) VALUES (?, ?)"
        rowid (json-encode embedding))))
@@ -182,7 +183,7 @@ Denote note."
   (let ((id (denote-retrieve-filename-identifier file)))
     (denote-vss--clear-embeddings id)
     (dolist (document (funcall denote-vss-node-content-function file))
-      (denote-vss--with-embedding document
+      (denote-vss--with-embedding (cdr document)
         (denote-vss--handle-returned-embedding
          id document embedding)))))
 
@@ -201,7 +202,7 @@ With prefix argument ARG, don't request user confirmation."
   (when (or arg
             (yes-or-no-p "Really clear database?"))
     (denote-vss--query
-     nil "DROP TABLE denote_documents")
+     nil "DROP TABLE documents")
     (denote-vss--query
      nil "DROP TABLE vss_denote")
     (denote-vss--create-table)))
@@ -215,8 +216,8 @@ With prefix argument ARG, don't request user confirmation."
                   ;; HACK When doing a JOIN, sqlite-vss complains about the lack
                   ;; of a LIMIT clause even when it is present, so use the old
                   ;; way of doing it instead.
-                  :select "SELECT denote_id, content, distance FROM vss_denote
-                           JOIN denote_documents ON vss_denote.rowid = denote_documents.id
+                  :select "SELECT denote_id, content, point, distance FROM vss_denote
+                           JOIN documents ON vss_denote.rowid = documents.id
                            WHERE vss_search(embedding, vss_search_params(json(?), 20))"
                   (json-encode embedding)))
            (buffer (get-buffer-create "*VSS Search Results*"))
@@ -224,7 +225,7 @@ With prefix argument ARG, don't request user confirmation."
       (switch-to-buffer buffer)
       (erase-buffer)
       (dolist (row rows)
-        (cl-destructuring-bind (id content dist) row
+        (cl-destructuring-bind (id content point dist) row
           (insert (format "%s (%d)" content dist)))))))
 
 (provide 'denote-vss)
