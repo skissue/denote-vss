@@ -171,7 +171,7 @@ Paragraphs are determined by two consecutive newlines."
        rowid (json-encode embedding))))
   (message "Embeddings updated!"))
 
-(defun denote-vss--get-xref-item (id point content)
+(defun denote-vss--get-xref-item (id point content dist)
   "Return an `xref-match-item' for note with ID at POINT with CONTENT."
   (let* ((file (denote-get-path-by-id id))
          ;; It may seem wasteful to open a buffer for every searched file, but
@@ -180,7 +180,7 @@ Paragraphs are determined by two consecutive newlines."
          ;; column number, but we're storing the point.
          (buf (find-file-noselect file)))
     (xref-make-match
-     content
+     (format "Distance: %d\n%s" (round dist) content)
      (xref-make-buffer-location buf point)
      (length content))))
 
@@ -236,7 +236,7 @@ With prefix argument ARG, don't request user confirmation."
       (xref-show-xrefs
        (mapcar (lambda (row)
                  (cl-destructuring-bind (id content point dist) row
-                   (denote-vss--get-xref-item id point content)))
+                   (denote-vss--get-xref-item id point content dist)))
                rows)
        nil))))
 
